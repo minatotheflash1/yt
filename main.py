@@ -20,11 +20,10 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 YOUTUBE_RSS = f"https://www.youtube.com/feeds/videos.xml?channel_id={YOUTUBE_CHANNEL_ID}"
 YOUTUBE_CHANNEL_LINK = f"https://www.youtube.com/channel/{YOUTUBE_CHANNEL_ID}"
 
-# --- FIX 1: Members Intent Added ---
 intents = discord.Intents.default()
 intents.message_content = True  
 intents.voice_states = True     
-intents.members = True # এটি না থাকলে বট আগে থেকে VC তে থাকা মেম্বারদের চিনতে পারে না
+intents.members = True # এটি কাজ করার জন্য Developer Portal-এ Members Intent On থাকতে হবে
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 db_pool = None
@@ -152,7 +151,6 @@ async def check_youtube():
                 
                 ping_text = f"<@&{PING_ROLE_ID}>" if PING_ROLE_ID else "@everyone"
                 
-                # FIX 2: Channel fetch system update
                 channel = bot.get_channel(DISCORD_CHANNEL_ID)
                 if not channel:
                     channel = await bot.fetch_channel(DISCORD_CHANNEL_ID)
@@ -161,12 +159,12 @@ async def check_youtube():
                     await channel.send(content=f"{ping_text} **New Content is Live!**", embed=embed)
                     await conn.execute('INSERT INTO posted_videos (video_id) VALUES ($1)', video_id)
                 else:
-                    print(f"Error: Discord Channel ID {DISCORD_CHANNEL_ID} not found or Bot has no access!")
+                    print(f"Error: Discord Channel ID {DISCORD_CHANNEL_ID} not found!")
                     
     except Exception as e:
         print(f"YouTube Loop Error: {e}")
 
-# --- SLASH COMMANDS ---
+# --- FIX: Type Checking for Members ---
 
 @bot.tree.command(name="testalert", description="Check if the bot can send YouTube alerts to the text channel")
 async def testalert(interaction: discord.Interaction):
@@ -182,27 +180,36 @@ async def testalert(interaction: discord.Interaction):
         await channel.send("✅ **TEST SUCCESSFUL:** Bot ei channel e YouTube alert pathate parbe!")
         await interaction.response.send_message(f"✅ Test message sent to <#{DISCORD_CHANNEL_ID}>", ephemeral=True)
     except Exception as e:
-        await interaction.response.send_message(f"❌ Failed! Error: `{e}` (Bot ke ai text channel e message deyar permission din)", ephemeral=True)
+        await interaction.response.send_message(f"❌ Failed! Error: `{e}`", ephemeral=True)
 
 @bot.tree.command(name="join", description="Voice channel e join korbe (Deafen mode e)")
 async def join(interaction: discord.Interaction):
-    if not interaction.user.voice:
-        await interaction.response.send_message("❌ Apni kono voice channel e nei! Age ekta VC te join korun.", ephemeral=True)
+    # Server e command na dile atke dibe
+    if not interaction.guild:
+        await interaction.response.send_message("❌ Ei command ti shudhu server e kaj korbe!", ephemeral=True)
         return
-    
-    channel = interaction.user.voice.channel
-    if not interaction.guild.voice_client:
-        await channel.connect(self_deaf=True)
-        await interaction.response.send_message(f"✅ **{channel.name}** te join korechi! (Deafen mode active 🎧)")
+
+    # Check kora hocche user asolei Member kina ebong VC te ache kina
+    if isinstance(interaction.user, discord.Member) and interaction.user.voice:
+        channel = interaction.user.voice.channel
+        if not interaction.guild.voice_client:
+            await channel.connect(self_deaf=True)
+            await interaction.response.send_message(f"✅ **{channel.name}** te join korechi! (Deafen mode active 🎧)")
+        else:
+            await interaction.response.send_message("⚠️ Ami idomoddhei ekta voice channel e achi.")
     else:
-        await interaction.response.send_message("⚠️ Ami idomoddhei ekta voice channel e achi.")
+        await interaction.response.send_message("❌ Apni kono voice channel e nei! Age ekta VC te join korun.", ephemeral=True)
 
 @bot.tree.command(name="play", description="YouTube link ba gaaner nam diye play korun")
 async def play(interaction: discord.Interaction, query: str):
     await interaction.response.defer() 
 
-    if not interaction.user.voice:
-        await interaction.followup.send("❌ Apni kono voice channel e nei! (Jodi already theke thaken, tobe ekbar leave niye abar join korun)")
+    if not interaction.guild:
+        await interaction.followup.send("❌ Ei command ti shudhu server e kaj korbe!")
+        return
+
+    if not isinstance(interaction.user, discord.Member) or not interaction.user.voice:
+        await interaction.followup.send("❌ Apni kono voice channel e nei! (VC te join kore abar try korun)")
         return
 
     vc = interaction.guild.voice_client
