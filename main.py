@@ -8,33 +8,30 @@ import asyncio
 import yt_dlp
 from dotenv import load_dotenv
 
-# Local env file load
 load_dotenv()
 
-# --- Configuration from Variables ---
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0))
 YOUTUBE_CHANNEL_ID = os.getenv('YOUTUBE_CHANNEL_ID')
-PING_ROLE_ID = os.getenv('PING_ROLE_ID') # Optional
+PING_ROLE_ID = os.getenv('PING_ROLE_ID') 
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 YOUTUBE_RSS = f"https://www.youtube.com/feeds/videos.xml?channel_id={YOUTUBE_CHANNEL_ID}"
 YOUTUBE_CHANNEL_LINK = f"https://www.youtube.com/channel/{YOUTUBE_CHANNEL_ID}"
 
-# --- Intents Setup ---
+# --- FIX 1: Members Intent Added ---
 intents = discord.Intents.default()
 intents.message_content = True  
 intents.voice_states = True     
+intents.members = True # এটি না থাকলে বট আগে থেকে VC তে থাকা মেম্বারদের চিনতে পারে না
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 db_pool = None
 
-# --- Global Music Queues ---
 song_queues = {}
 current_songs = {}
 
-# --- YouTube Music (yt-dlp) Setup ---
 yt_dlp.utils.bug_reports_message = lambda: ''
 ytdl_format_options = {
     'format': 'bestaudio/best',
@@ -65,14 +62,12 @@ class YTDLSource(discord.PCMVolumeTransformer):
     @classmethod
     async def from_url(cls, url, *, loop=None, stream=False):
         loop = loop or asyncio.get_event_loop()
-        # Search link ba nam jevabei asuk, oyt-dlp theke handle korbe
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
         if 'entries' in data:
-            data = data['entries'][0] # ytsearch er khetre prothom result ta nibe
+            data = data['entries'][0] 
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(discord.FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
-# Queue theke automatic porer gaan chalanor function
 def play_next(channel, guild_id):
     vc = channel.guild.voice_client
     if vc and guild_id in song_queues and len(song_queues[guild_id]) > 0:
@@ -84,7 +79,6 @@ def play_next(channel, guild_id):
         if guild_id in current_songs:
             del current_songs[guild_id]
 
-# --- Database & AI Functions ---
 async def init_db():
     global db_pool
     if DATABASE_URL:
@@ -157,17 +151,38 @@ async def check_youtube():
                 embed.set_footer(text="Official Stream Alert")
                 
                 ping_text = f"<@&{PING_ROLE_ID}>" if PING_ROLE_ID else "@everyone"
+                
+                # FIX 2: Channel fetch system update
                 channel = bot.get_channel(DISCORD_CHANNEL_ID)
+                if not channel:
+                    channel = await bot.fetch_channel(DISCORD_CHANNEL_ID)
                 
                 if channel:
                     await channel.send(content=f"{ping_text} **New Content is Live!**", embed=embed)
-                
-                await conn.execute('INSERT INTO posted_videos (video_id) VALUES ($1)', video_id)
+                    await conn.execute('INSERT INTO posted_videos (video_id) VALUES ($1)', video_id)
+                else:
+                    print(f"Error: Discord Channel ID {DISCORD_CHANNEL_ID} not found or Bot has no access!")
+                    
     except Exception as e:
         print(f"YouTube Loop Error: {e}")
 
+# --- SLASH COMMANDS ---
 
-# --- 🔥 JOSS JOSS NEW SLASH COMMANDS 🔥 ---
+@bot.tree.command(name="testalert", description="Check if the bot can send YouTube alerts to the text channel")
+async def testalert(interaction: discord.Interaction):
+    if not DISCORD_CHANNEL_ID:
+        await interaction.response.send_message("❌ `.env` file e `DISCORD_CHANNEL_ID` set kora nei!", ephemeral=True)
+        return
+        
+    try:
+        channel = bot.get_channel(DISCORD_CHANNEL_ID)
+        if not channel:
+            channel = await bot.fetch_channel(DISCORD_CHANNEL_ID)
+            
+        await channel.send("✅ **TEST SUCCESSFUL:** Bot ei channel e YouTube alert pathate parbe!")
+        await interaction.response.send_message(f"✅ Test message sent to <#{DISCORD_CHANNEL_ID}>", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Failed! Error: `{e}` (Bot ke ai text channel e message deyar permission din)", ephemeral=True)
 
 @bot.tree.command(name="join", description="Voice channel e join korbe (Deafen mode e)")
 async def join(interaction: discord.Interaction):
@@ -177,7 +192,6 @@ async def join(interaction: discord.Interaction):
     
     channel = interaction.user.voice.channel
     if not interaction.guild.voice_client:
-        # self_deaf=True deyar fole bot automatic deafen hoye join korbe
         await channel.connect(self_deaf=True)
         await interaction.response.send_message(f"✅ **{channel.name}** te join korechi! (Deafen mode active 🎧)")
     else:
@@ -185,22 +199,20 @@ async def join(interaction: discord.Interaction):
 
 @bot.tree.command(name="play", description="YouTube link ba gaaner nam diye play korun")
 async def play(interaction: discord.Interaction, query: str):
-    await interaction.response.defer() # Gaan fetch korte somoy nitey pare tai defer kora holo
+    await interaction.response.defer() 
 
     if not interaction.user.voice:
-        await interaction.followup.send("❌ Apni kono voice channel e nei!")
+        await interaction.followup.send("❌ Apni kono voice channel e nei! (Jodi already theke thaken, tobe ekbar leave niye abar join korun)")
         return
 
     vc = interaction.guild.voice_client
     if not vc:
-        # self_deaf=True ekhaneo deya holo, jate direct play dileo deafen hoye join kore
         vc = await interaction.user.voice.channel.connect(self_deaf=True)
 
     guild_id = interaction.guild.id
     if guild_id not in song_queues:
         song_queues[guild_id] = []
 
-    # Jodi input e kono link na thake, tahole automatic YouTube e search korbe
     search_query = query if query.startswith(('http://', 'https://', 'www.')) else f"ytsearch:{query}"
 
     try:
@@ -264,19 +276,6 @@ async def nowplaying(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⚠️ Ekhon kono gaan bajche na.")
 
-@bot.tree.command(name="volume", description="Bot er volume change korun (0-100)")
-async def volume(interaction: discord.Interaction, vol: int):
-    vc = interaction.guild.voice_client
-    if not vc:
-        await interaction.response.send_message("❌ Bot kono voice channel e nei.", ephemeral=True)
-        return
-    
-    if 0 <= vol <= 100:
-        vc.source.volume = vol / 100
-        await interaction.response.send_message(f"🔊 Volume set kora holo: **{vol}%**")
-    else:
-        await interaction.response.send_message("❌ Volume obossoi 0 theke 100 er moddhe hote hobe!", ephemeral=True)
-
 @bot.tree.command(name="leave", description="Gaan bondho kore queue clear korun ebong VC theke ber hon")
 async def leave(interaction: discord.Interaction):
     guild_id = interaction.guild.id
@@ -293,7 +292,6 @@ async def leave(interaction: discord.Interaction):
     else:
         await interaction.response.send_message("⚠️ Ami kono voice channel e nei!", ephemeral=True)
 
-# --- BOT READY EVENT ---
 @bot.event
 async def on_ready():
     await init_db()
@@ -313,4 +311,4 @@ async def on_ready():
 if DISCORD_TOKEN:
     bot.run(DISCORD_TOKEN)
 else:
-    print("Error: DISCORD_TOKEN absolute missing in Environment Variables!")
+    print("Error: DISCORD_TOKEN missing!")
