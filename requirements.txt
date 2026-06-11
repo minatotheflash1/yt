@@ -1,7 +1,9 @@
-discord.py==2.3.2
-feedparser==6.0.10
-asyncpg==0.30.0
-aiohttp==3.9.3
-python-dotenv==1.0.1
+discord.py>=2.3.2
+feedparser>=6.0.10
+asyncpg>=0.30.0
+aiohttp>=3.9.3
+python-dotenv>=1.0.1
 audioop-lts==0.2.1
 legacy-cgi==2.6
+yt-dlp
+PyNaCl
